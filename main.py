@@ -89,10 +89,24 @@ class MuteEmbedsDataset(Dataset):
                 self.__get_text(true_idx))
 
 # train and test dataloaders
-train_loader = iter(DataLoader(MuteEmbedsDataset(TEXT_URL, PHOTOS_URL),
+train_dataset = MuteEmbedsDataset(TEXT_URL, PHOTOS_URL)
+train_loader = iter(DataLoader(train_dataset,
                                batch_size=BATCH_SIZE, shuffle=True))
-test_loader = iter(DataLoader(MuteEmbedsDataset(TEXT_URL, PHOTOS_URL, training=False),
+test_dataset = MuteEmbedsDataset(TEXT_URL, PHOTOS_URL, training=False)
+test_loader = iter(DataLoader(test_dataset,
                               batch_size=BATCH_SIZE, shuffle=True))
 
-# initial
+# network!
+class MuteEmbeds(nn.Module):
+
+    def __init__(self, num_words, seq_length, hidden_size=128):
+        super(MuteEmbeds, self).__init__()
+
+        # text emebding; PADDING FOR THIS TOKENIZER IS IDX=1
+        self.embedding = nn.Embedding(num_words, seq_length, padding_idx=1)
+
+
+    def forward(self, x, embed=False):
+        pass
+
 
