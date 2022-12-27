@@ -108,32 +108,42 @@ def collate_and_pad(data, padding_idx=1):
                                padding_value=(padding_idx if i[0] != "text_mask"
                                               else 0)) for i in common_entries(*data)}
 
-train_dataset = MuteEmbedsDataset(TEXT_URL, PHOTOS_URL, truncate_text=TEXT_LENGTH)
+tokenizer = AutoTokenizer.from_pretrained("facebook/bart-large")
+
+train_dataset = MuteEmbedsDataset(TEXT_URL, PHOTOS_URL, truncate_text=TEXT_LENGTH, tokenizer=tokenizer)
 train_loader = iter(DataLoader(train_dataset, collate_fn=collate_and_pad,
                                batch_size=BATCH_SIZE, shuffle=True))
 
-test_dataset = MuteEmbedsDataset(TEXT_URL, PHOTOS_URL, training=False, truncate_text=TEXT_LENGTH)
-test_loader = iter(DataLoader(test_dataset,
+test_dataset = MuteEmbedsDataset(TEXT_URL, PHOTOS_URL, training=False, truncate_text=TEXT_LENGTH, tokenizer=tokenizer)
+test_loader = iter(DataLoader(test_dataset, collate_fn=collate_and_pad,
                               batch_size=BATCH_SIZE, shuffle=True))
 
 # network!
 class MuteEmbeds(nn.Module):
 
-    def __init__(self, num_words, hidden_size=128):
+    def __init__(self, vocab_size, size=128):
 
         super(MuteEmbeds, self).__init__()
 
         # text emebding; PADDING FOR THIS TOKENIZER IS IDX=1
-        self.embedding = nn.Embedding(num_words, hidden_size, padding_idx=1)
+        self.embedding = nn.Embedding(vocab_size, size, padding_idx=1)
 
         # the encoder network
-        encoder_layer = nn.TransformerEncoderLayer(d_model=encoding_size, )
-        self.encoder = nn.TransformerEncoder(
+        encoder_layer = nn.TransformerEncoderLayer(d_model=size, nhead=8)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=3)
 
-        # the image decoder
-        # self.img_dec = nn.Linear(
+        # decoder
+        pictoral_decoder_layer = nn.TransformerDecoderLayer(d_model=size, nhead=8)
+        self.pictoral_decoder = nn.TransformerDecoder(pictoral_decoder_layer, num_layers=3)
 
-    def forward(self, x, embed=False):
-        pass
+        text_decoder_layer = nn.TransformerDecoderLayer(d_model=size, nhead=8)
+        self.text_decoder = nn.TransformerDecoder(text_decoder_layer, num_layers=3)
+        self.text_head = nn.Linear(size, vocab_size)
+
+    def forward(self, x, text=False, mask=None):
+        # depending on if text or not, the model behaves differently
+        
+        if text:
+            net = self.embedding(x)
 
 
