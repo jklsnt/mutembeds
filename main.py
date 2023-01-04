@@ -284,7 +284,31 @@ def train():
     torch.save(network, f"./models/{run.name}/model.save")
     torch.save(optimizer, f"./models/{run.name}/optimizer.save")
 
-# def load(path):
-#     loaded_model = torch.load(f"./models/{run.name}.model"
+def load(path):
+    loaded_model = torch.load(f"./{path}/model.save", map_location=DEVICE)
+    loaded_optimizer = torch.load(f"./{path}/optimizer.save", map_location=DEVICE)
 
-# train()
+    return loaded_model, loaded_optimizer
+
+def analyze():
+    model, optimizer = load("./models/cosmic-mountain-1")
+
+    sents = tokenizer(["She is a queen.",
+                    "He is a king.",
+                    "He is a chicken."],
+                    max_length=TEXT_LENGTH,
+                    truncation=True,
+                    padding=True,
+                    return_tensors='pt')
+
+    results = model(sents["input_ids"], mask=sents["attention_mask"].float())
+    # seperate output
+    first, second, third = results["embedding"]
+
+
+    torch.sum((first-second)**2)**0.5
+    torch.sum((second-third)**2)**0.5
+    torch.sum((first-third)**2)**0.5
+
+    # train()
+
