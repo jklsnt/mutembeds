@@ -39,7 +39,7 @@ DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cp
 CONFIG = {
     "epochs": 3,
     "lr": 3e-3,
-    "batch_size": 4,
+    "batch_size": 32,
     "img_length": 64, # image side length (square)
     "text_length": 128, # max text length
 }
@@ -131,11 +131,14 @@ def collate_and_pad(data, padding_idx=1):
                                padding_value=(padding_idx if i[0] != "text_mask"
                                               else 0)) for i in common_entries(*data)}
 
+print("Seeding tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained("facebook/bart-large")
 
+print("Building training dataset...")
 train_dataset = MuteEmbedsDataset(TEXT_URL, PHOTOS_URL, truncate_text=TEXT_LENGTH, tokenizer=tokenizer)
 train_loader = DataLoader(train_dataset, collate_fn=collate_and_pad, batch_size=BATCH_SIZE, shuffle=True)
 
+print("Building validation dataset...")
 test_dataset = MuteEmbedsDataset(TEXT_URL, PHOTOS_URL, training=False, truncate_text=TEXT_LENGTH, tokenizer=tokenizer)
 test_loader = DataLoader(test_dataset, collate_fn=collate_and_pad, batch_size=BATCH_SIZE, shuffle=True)
 
@@ -201,7 +204,8 @@ class MuteEmbeds(nn.Module):
             net = self.image_preprocessing(x)
 
         # sine wave positional encoding
-        pos_encoding = self.positionalencoding1d(self.size, net.shape[1])
+        # we want to move it to the device we are working on
+        pos_encoding = self.positionalencoding1d(self.size, net.shape[1]).to(net.device)
         net += pos_encoding
 
         net = self.encoder(net.transpose(0,1), src_key_padding_mask=mask).transpose(0,1) # transpose because its sequence first
@@ -223,11 +227,13 @@ class MuteEmbeds(nn.Module):
             "loss": loss
         }
 
+print("Initializing model...")
 network = MuteEmbeds(len(tokenizer)).to(DEVICE)
 optimizer = AdamW(network.parameters(), lr=LEARNING_RATE)
 
 val_loader_iter = iter(test_loader)
 
+print("Training!")
 for epoch in range(EPOCHS):
     print(f"Training epoch {epoch}...")
     for i, batch in enumerate(tqdm(iter(train_loader))):
