@@ -1,6 +1,7 @@
 # modeling libraries
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import tokenizers
 import numpy as np
 
@@ -18,6 +19,7 @@ from tqdm import tqdm
 # stdlib utilities
 import json
 import glob
+import math
 import random
 
 # import pillow
@@ -26,7 +28,7 @@ from PIL import Image
 TEXT_URL = "./data/cc_news.txt"
 PHOTOS_URL = "./data/COCO.npy"
 
-# IMG_LENGTH = 64 # image side length 
+IMG_LENGTH = 64 # image side length 
 TEXT_LENGTH = 128 # max text length
 # TODO TODO TODO  # TODO TODO TODO  # TODO TODO TODO
 
@@ -93,8 +95,8 @@ class MuteEmbedsDataset(Dataset):
         # get a single sample of image AND text
         text_encoded = self.__get_text(true_idx)
         return {"text_sample": text_encoded["input_ids"][0],    # because we are encoding
-                "text_mask": text_encoded["attention_mask"][0], # 1 sample at a time
-                "image": self.__get_image(true_idx)}
+                "text_mask": text_encoded["attention_mask"][0].float(), # 1 sample at a time
+                "image": self.__get_image(true_idx).float()}
 
 # train and test dataloaders
 def common_entries(*dcts):
@@ -121,29 +123,103 @@ test_loader = iter(DataLoader(test_dataset, collate_fn=collate_and_pad,
 # network!
 class MuteEmbeds(nn.Module):
 
-    def __init__(self, vocab_size, size=128):
+    def __init__(self, vocab_size, image_length=IMG_LENGTH, max_text_length=TEXT_LENGTH, size=128):
 
         super(MuteEmbeds, self).__init__()
 
         # text emebding; PADDING FOR THIS TOKENIZER IS IDX=1
-        self.embedding = nn.Embedding(vocab_size, size, padding_idx=1)
+        self.text_embedding = nn.Embedding(vocab_size, size, padding_idx=1)
+        self.image_preprocessing = nn.Linear(image_length, size)
 
         # the encoder network
         encoder_layer = nn.TransformerEncoderLayer(d_model=size, nhead=8)
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=3)
 
         # decoder
-        pictoral_decoder_layer = nn.TransformerDecoderLayer(d_model=size, nhead=8)
-        self.pictoral_decoder = nn.TransformerDecoder(pictoral_decoder_layer, num_layers=3)
+        self.text_decoder = nn.Linear(size, vocab_size)
+        self.image_decoder = nn.Linear(size, image_length)
 
-        text_decoder_layer = nn.TransformerDecoderLayer(d_model=size, nhead=8)
-        self.text_decoder = nn.TransformerDecoder(text_decoder_layer, num_layers=3)
-        self.text_head = nn.Linear(size, vocab_size)
+        # store size
+        self.size = size
+        self.max_text_length = max_text_length
+        self.vocab_size = vocab_size
 
-    def forward(self, x, text=False, mask=None):
+        # util layers
+        self.sigmoid = nn.Sigmoid()
+        self.cross_entropy = nn.CrossEntropyLoss()
+
+    @staticmethod
+    def positionalencoding1d(d_model, length_max):
+        """
+        PositionalEncoding2D: https://github.com/wzlxjtu/PositionalEncoding2D/blob/master/positionalembedding2d.py
+        AttentionIsAllYouNeed: https://arxiv.org/pdf/1706.03762.pdf
+        :param d_model: dimension of the model
+        :param length: length of positions
+        :return: length*d_model position matrix
+        """
+        if d_model % 2 != 0:
+            raise ValueError("Cannot use sin/cos positional encoding with "
+                             "odd dim (got dim={:d})".format(d_model))
+        pe = torch.zeros(length_max, d_model)
+        position = torch.arange(0, length_max).unsqueeze(1)
+        div_term = torch.exp((torch.arange(0, d_model, 2, dtype=torch.float) *
+                              -(math.log(10000.0) / d_model)))
+        pe[:, 0::2] = torch.sin(position.float() * div_term)
+        pe[:, 1::2] = torch.cos(position.float() * div_term)
+
+        return pe
+
+    def forward(self, x, mask=None):
         # depending on if text or not, the model behaves differently
-        
-        if text:
-            net = self.embedding(x)
+        # in text, we are passed a series of embedding indicies,
+        # so it will be of type int and have 2 dims. Otherwise, float
+        # and 3 dims. So:
+        text = (len(x.shape) == 2 and not torch.is_floating_point(x))
 
+        if text:
+            net = self.text_embedding(x)*math.sqrt(self.size) # TODO why?
+        else:
+            net = self.image_preprocessing(x)
+
+        # sine wave positional encoding
+        pos_encoding = self.positionalencoding1d(self.size, net.shape[1])
+        net += pos_encoding
+
+        net = self.encoder(net.transpose(0,1), src_key_padding_mask=mask).transpose(0,1) # transpose because its sequence first
+                                                                                         # and then we transpose back
+
+        if text:
+            out = self.text_decoder(net)
+        else:
+            out = self.sigmoid(self.image_decoder(net))
+
+        # apparently, not normalizing is the standard
+        if text:
+            loss = F.cross_entropy(out, F.one_hot(x, self.vocab_size).float())
+        else:
+            loss = torch.mean(torch.abs(out - x)) # we use MAE instead of SSE because of gradient EXPLOSURION from squaring
+
+        return {
+            "embedding": net,
+            "out": out,
+            "loss": loss
+        }
+
+sample = next(test_loader)
+sample.keys()
+
+me = MuteEmbeds(len(tokenizer))
+sample["text_sample"].dtype
+sample["image"].dtype
+sample["image"].shape
+
+
+sample['image']
+me.image_preprocessing.weight.dtype
+tmp1 = me(sample['image'])
+tmp2 = me(sample['text_sample'], mask=sample['text_mask'].float())
+
+tmp1["embedding"].shape
+tmp2["embedding"].shape
+tmp2["loss"]
 
