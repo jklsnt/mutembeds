@@ -172,3 +172,5 @@ models/
 
 
 /*.py#
+# wandb logs
+wandb/
