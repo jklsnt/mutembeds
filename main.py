@@ -1,4 +1,5 @@
 # modeling libraries
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -278,8 +279,10 @@ for epoch in range(EPOCHS):
         optimizer.step()
         optimizer.zero_grad()
 
-torch.save(network, f"./models/{run.name}.model")
-torch.save(optimizer, f"./models/{run.name}.optimizer")
+print("All done. Saving!")
+os.mkdir(f"./models/{run.name}")
+torch.save(network, f"./models/{run.name}/model.save")
+torch.save(optimizer, f"./models/{run.name}/optimizer.save")
 
 
        
