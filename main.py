@@ -228,61 +228,63 @@ class MuteEmbeds(nn.Module):
             "loss": loss
         }
 
-print("Initializing model...")
-network = MuteEmbeds(len(tokenizer)).to(DEVICE)
-optimizer = AdamW(network.parameters(), lr=LEARNING_RATE)
+def train():
+    print("Initializing model...")
+    network = MuteEmbeds(len(tokenizer)).to(DEVICE)
+    optimizer = AdamW(network.parameters(), lr=LEARNING_RATE)
 
-val_loader_iter = iter(test_loader)
+    val_loader_iter = iter(test_loader)
 
-print("Training!")
-for epoch in range(EPOCHS):
-    print(f"Training epoch {epoch}...")
-    for i, batch in enumerate(tqdm(iter(train_loader))):
-        # run validation if needed
-        if i % VALIDATE_EVERY == 0:
-            try:
-                val_batch = next(val_loader_iter)
-            except StopIteration:
-                val_loader_iter = iter(test_loader) # restart the iterator
-                val_batch = next(val_loader_iter)
+    print("Training!")
+    for epoch in range(EPOCHS):
+        print(f"Training epoch {epoch}...")
+        for i, batch in enumerate(tqdm(iter(train_loader))):
+            # run validation if needed
+            if i % VALIDATE_EVERY == 0:
+                try:
+                    val_batch = next(val_loader_iter)
+                except StopIteration:
+                    val_loader_iter = iter(test_loader) # restart the iterator
+                    val_batch = next(val_loader_iter)
 
-            # create validation passes
-            text_output = network(val_batch['text_sample'].to(DEVICE), mask=val_batch['text_mask'].to(DEVICE))
-            image_output = network(val_batch['image'].to(DEVICE))
+                # create validation passes
+                text_output = network(val_batch['text_sample'].to(DEVICE), mask=val_batch['text_mask'].to(DEVICE))
+                image_output = network(val_batch['image'].to(DEVICE))
+
+                # log!
+                run.log({
+                    "val_text_loss": text_output["loss"].cpu().detach().item(),
+                    "val_image_loss": image_output["loss"].cpu().detach().item(),
+                })
+
+            # run both through the network
+            text_output = network(batch['text_sample'].to(DEVICE), mask=batch['text_mask'].to(DEVICE))
+            image_output = network(batch['image'].to(DEVICE))
+
+            # get both losses
+            text_loss = text_output["loss"]
+            image_loss = image_output["loss"]
 
             # log!
             run.log({
-                "val_text_loss": text_output["loss"].cpu().detach().item(),
-                "val_image_loss": image_output["loss"].cpu().detach().item(),
+                "text_loss": text_loss.cpu().detach().item(),
+                "image_loss": image_loss.cpu().detach().item(),
             })
 
+            # backprop!
+            text_loss.backward()
+            image_loss.backward()
 
-        # run both through the network
-        text_output = network(batch['text_sample'].to(DEVICE), mask=batch['text_mask'].to(DEVICE))
-        image_output = network(batch['image'].to(DEVICE))
+            # then, step
+            optimizer.step()
+            optimizer.zero_grad()
 
-        # get both losses
-        text_loss = text_output["loss"]
-        image_loss = image_output["loss"]
+    print("All done. Saving!")
+    os.mkdir(f"./models/{run.name}")
+    torch.save(network, f"./models/{run.name}/model.save")
+    torch.save(optimizer, f"./models/{run.name}/optimizer.save")
 
-        # log!
-        run.log({
-            "text_loss": text_loss.cpu().detach().item(),
-            "image_loss": image_loss.cpu().detach().item(),
-        })
+# def load(path):
+#     loaded_model = torch.load(f"./models/{run.name}.model"
 
-        # backprop!
-        text_loss.backward()
-        image_loss.backward()
-
-        # then, step
-        optimizer.step()
-        optimizer.zero_grad()
-
-print("All done. Saving!")
-os.mkdir(f"./models/{run.name}")
-torch.save(network, f"./models/{run.name}/model.save")
-torch.save(optimizer, f"./models/{run.name}/optimizer.save")
-
-
-       
+# train()
