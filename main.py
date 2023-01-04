@@ -2,8 +2,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.optim import AdamW
 import tokenizers
 import numpy as np
+
+import wandb
 
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
@@ -27,13 +30,31 @@ from PIL import Image
 
 TEXT_URL = "./data/cc_news.txt"
 PHOTOS_URL = "./data/COCO.npy"
+VALIDATE_EVERY = 20
 
-IMG_LENGTH = 64 # image side length 
-TEXT_LENGTH = 128 # max text length
-# TODO TODO TODO  # TODO TODO TODO  # TODO TODO TODO
+# initialize the device
+DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-BATCH_SIZE = 16
-EPOCHS = 3
+# initialize the model
+CONFIG = {
+    "epochs": 3,
+    "lr": 3e-3,
+    "batch_size": 4,
+    "img_length": 64, # image side length (square)
+    "text_length": 128, # max text length
+}
+
+# set up the run
+# run = wandb.init(project="DBA", entity="jemoka", config=CONFIG)
+run = wandb.init(project="DBA", entity="jemoka", config=CONFIG, mode="disabled")
+config = run.config
+
+IMG_LENGTH = config.img_length # image side length 
+TEXT_LENGTH = config.text_length # max text length
+
+BATCH_SIZE = config.batch_size
+EPOCHS = config.epochs
+LEARNING_RATE=config.lr
 
 # create a tokenizer
 class MuteEmbedsDataset(Dataset):
@@ -113,12 +134,10 @@ def collate_and_pad(data, padding_idx=1):
 tokenizer = AutoTokenizer.from_pretrained("facebook/bart-large")
 
 train_dataset = MuteEmbedsDataset(TEXT_URL, PHOTOS_URL, truncate_text=TEXT_LENGTH, tokenizer=tokenizer)
-train_loader = iter(DataLoader(train_dataset, collate_fn=collate_and_pad,
-                               batch_size=BATCH_SIZE, shuffle=True))
+train_loader = DataLoader(train_dataset, collate_fn=collate_and_pad, batch_size=BATCH_SIZE, shuffle=True)
 
 test_dataset = MuteEmbedsDataset(TEXT_URL, PHOTOS_URL, training=False, truncate_text=TEXT_LENGTH, tokenizer=tokenizer)
-test_loader = iter(DataLoader(test_dataset, collate_fn=collate_and_pad,
-                              batch_size=BATCH_SIZE, shuffle=True))
+test_loader = DataLoader(test_dataset, collate_fn=collate_and_pad, batch_size=BATCH_SIZE, shuffle=True)
 
 # network!
 class MuteEmbeds(nn.Module):
@@ -201,25 +220,60 @@ class MuteEmbeds(nn.Module):
 
         return {
             "embedding": net,
-            "out": out,
             "loss": loss
         }
 
-sample = next(test_loader)
-sample.keys()
+network = MuteEmbeds(len(tokenizer)).to(DEVICE)
+optimizer = AdamW(network.parameters(), lr=LEARNING_RATE)
 
-me = MuteEmbeds(len(tokenizer))
-sample["text_sample"].dtype
-sample["image"].dtype
-sample["image"].shape
+val_loader_iter = iter(test_loader)
+
+for epoch in range(EPOCHS):
+    print(f"Training epoch {epoch}...")
+    for i, batch in enumerate(tqdm(iter(train_loader))):
+        # run validation if needed
+        if i % VALIDATE_EVERY == 0:
+            try:
+                val_batch = next(val_loader_iter)
+            except StopIteration:
+                val_loader_iter = iter(test_loader) # restart the iterator
+                val_batch = next(val_loader_iter)
+
+            # create validation passes
+            text_output = network(val_batch['text_sample'].to(DEVICE), mask=val_batch['text_mask'].to(DEVICE))
+            image_output = network(val_batch['image'].to(DEVICE))
+
+            # log!
+            run.log({
+                "val_text_loss": text_output["loss"].cpu().detach().item(),
+                "val_image_loss": image_output["loss"].cpu().detach().item(),
+            })
 
 
-sample['image']
-me.image_preprocessing.weight.dtype
-tmp1 = me(sample['image'])
-tmp2 = me(sample['text_sample'], mask=sample['text_mask'].float())
+        # run both through the network
+        text_output = network(batch['text_sample'].to(DEVICE), mask=batch['text_mask'].to(DEVICE))
+        image_output = network(batch['image'].to(DEVICE))
 
-tmp1["embedding"].shape
-tmp2["embedding"].shape
-tmp2["loss"]
+        # get both losses
+        text_loss = text_output["loss"]
+        image_loss = image_output["loss"]
 
+        # log!
+        run.log({
+            "text_loss": text_loss.cpu().detach().item(),
+            "image_loss": image_loss.cpu().detach().item(),
+        })
+
+        # backprop!
+        text_loss.backward()
+        image_loss.backward()
+
+        # then, step
+        optimizer.step()
+        optimizer.zero_grad()
+
+torch.save(network, f"./models/{run.name}.model")
+torch.save(optimizer, f"./models/{run.name}.optimizer")
+
+
+       
